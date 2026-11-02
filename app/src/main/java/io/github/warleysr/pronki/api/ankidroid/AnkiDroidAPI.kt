@@ -1,125 +1,106 @@
 package io.github.warleysr.pronki.api.ankidroid
 
-import android.content.ContentValues
-import android.content.pm.PackageManager
-import android.net.Uri
-import androidx.core.content.ContextCompat
-import com.ichi2.anki.FlashCardsContract
-import com.ichi2.anki.api.AddContentApi.Companion.READ_WRITE_PERMISSION
-import io.github.warleysr.pronki.PronKi
-
 class AnkiDroidAPI {
 
     companion object {
-
-        private val CARD_PROJECTION = arrayOf(
-            FlashCardsContract.Card.QUESTION_SIMPLE, FlashCardsContract.Card.ANSWER_PURE
-        )
 
         const val AGAIN = 1
         const val HARD = 2
         const val GOOD = 3
         const val EASY = 4
 
+        private val NEXT_TIMES = listOf("1 min", "10 min", "1 day", "4 days")
+
+        private val ERRANDS = listOf(
+            "Where's the nearest pharmacy?" to "asking for help nearby",
+            "I need to pick up my prescription." to "at the pharmacy counter",
+            "I'm looking for whole wheat bread." to "finding items in the store",
+            "Do you have this in a larger size?" to "shopping for clothes",
+            "How much is a bag of apples?" to "checking prices at the market",
+            "Can I pay with my credit card?" to "at the checkout",
+            "What time do you close tonight?" to "asking about store hours"
+        )
+
+        private val FOOD = listOf(
+            "Could I get a glass of water, please?" to "a polite request at a café",
+            "A small coffee with milk, please." to "ordering a drink",
+            "Can I see the menu, please?" to "sitting down to eat",
+            "I'll have the soup and a salad." to "ordering your meal",
+            "Could we get the check, please?" to "asking to pay",
+            "Is this seat taken?" to "finding a place to sit",
+            "I'd like a table for two, please." to "arriving at a restaurant"
+        )
+
+        private val HEALTH = listOf(
+            "I'd like to make a doctor's appointment." to "calling the clinic",
+            "I've had a headache since this morning." to "describing symptoms",
+            "I'm feeling a little under the weather." to "saying you feel sick",
+            "Do I need a prescription for this?" to "asking about medicine",
+            "My throat's been sore for two days." to "describing symptoms",
+            "Could you check my blood pressure, please?" to "at a check-up"
+        )
+
+        private val FAMILY = listOf(
+            "Good morning, how are you today?" to "greeting someone warmly",
+            "It's nice to see you again." to "meeting a friend",
+            "The kids are doing great in school." to "sharing family news",
+            "We're having dinner at my place tonight." to "inviting someone over",
+            "Say hello to your family for me." to "sending regards",
+            "I'll call you back in ten minutes." to "ending a phone call",
+            "Have a safe trip home." to "saying goodbye"
+        )
+
+        private val DIRECTIONS = listOf(
+            "Excuse me, how do I get to the station?" to "asking for directions",
+            "Sorry, could you say that again?" to "asking someone to repeat",
+            "Could you speak a little more slowly?" to "asking for slower speech",
+            "Is it far from here?" to "checking the distance",
+            "Turn left at the next corner, right?" to "confirming directions",
+            "Which bus goes to the city center?" to "finding the right bus",
+            "I'm running a few minutes late." to "letting someone know"
+        )
+
+        private val deckCards = linkedMapOf(
+            DeckInfo(1L, "Errands & Shopping", 0, 0, ERRANDS.size) to ERRANDS,
+            DeckInfo(2L, "Food & Cafés", 0, 0, FOOD.size) to FOOD,
+            DeckInfo(3L, "Health & Appointments", 0, 0, HEALTH.size) to HEALTH,
+            DeckInfo(4L, "Greetings & Family", 0, 0, FAMILY.size) to FAMILY,
+            DeckInfo(5L, "Directions & Help", 0, 0, DIRECTIONS.size) to DIRECTIONS
+        )
+
+        private val decks = deckCards.keys.toList()
+        private var currentDeck = decks.first()
+        private var phraseIndex = 0
+
+        fun isPermissionGranted(): Boolean = true
+
+        fun getDeckList(): List<DeckInfo>? = decks
+
         fun selectDeck(deck: DeckInfo) {
-            val values = ContentValues()
-            values.put(FlashCardsContract.Deck.DECK_ID, deck.deckId)
-            PronKi.instance.applicationContext.contentResolver.update(
-                FlashCardsContract.Deck.CONTENT_SELECTED_URI, values, null, null
-            )
+            if (deck in decks) {
+                currentDeck = deck
+                phraseIndex = 0
+            }
         }
 
         fun queryNextCard(amount: Int = 1): CardInfo? {
-            val deckUri = FlashCardsContract.ReviewInfo.CONTENT_URI
-            val deckCursor = PronKi.instance.applicationContext.contentResolver.query(
-                deckUri, null, "limit=?", arrayOf(amount.toString()), null
+            val phrases = deckCards[currentDeck] ?: return null
+            if (phrases.isEmpty()) return null
+            val index = (phraseIndex + (amount - 1).coerceAtLeast(0)) % phrases.size
+            val (phrase, hint) = phrases[index]
+            return CardInfo(
+                noteId = currentDeck.deckId * 1000 + index,
+                cardOrd = 0,
+                questionRaw = phrase,
+                answerRaw = "$phrase<br><i>($hint)</i>",
+                nextTimes = NEXT_TIMES
             )
-            if (deckCursor == null || !deckCursor.moveToLast())
-                return null
-
-            if (deckCursor.count < amount)
-                return null
-
-            val noteIdCol = deckCursor.getColumnIndex(FlashCardsContract.ReviewInfo.NOTE_ID)
-            val cardOrdCol = deckCursor.getColumnIndex(FlashCardsContract.ReviewInfo.CARD_ORD)
-            val nextTimesCol = deckCursor.getColumnIndex(FlashCardsContract.ReviewInfo.NEXT_REVIEW_TIMES)
-            val noteId = deckCursor.getLong(noteIdCol)
-            val cardOrd = deckCursor.getInt(cardOrdCol)
-            val nextTimes = deckCursor.getString(nextTimesCol).replace("[]\"\\[]+".toRegex(), "").split(",")
-
-            deckCursor.close()
-
-            val noteUri = Uri.withAppendedPath(
-                FlashCardsContract.Note.CONTENT_URI, noteId.toString()
-            )
-            val cardsUri = Uri.withAppendedPath(noteUri, "cards")
-            val specificCardUri = Uri.withAppendedPath(cardsUri, cardOrd.toString())
-
-            val cardCursor = PronKi.instance.applicationContext.contentResolver.query(
-                specificCardUri, CARD_PROJECTION, null, null, null
-            )
-            if (cardCursor == null || !cardCursor.moveToFirst())
-                return null
-
-            val questionCol = cardCursor.getColumnIndex(FlashCardsContract.Card.QUESTION_SIMPLE)
-            val answerCol = cardCursor.getColumnIndex(FlashCardsContract.Card.ANSWER_PURE)
-
-            val question = cardCursor.getString(questionCol)
-            val answer = cardCursor.getString(answerCol)
-
-            cardCursor.close()
-
-            return CardInfo(noteId, cardOrd, question, answer, nextTimes)
-        }
-
-        fun getDeckList(): List<DeckInfo>? {
-            val decksCursor = PronKi.instance.applicationContext.contentResolver.query(
-                FlashCardsContract.Deck.CONTENT_ALL_URI, null, null, null, null
-            )
-            if (decksCursor == null || !decksCursor.moveToFirst())
-                return null
-
-            val decks = ArrayList<DeckInfo>()
-            do {
-                val deckIdCol = decksCursor.getColumnIndex(FlashCardsContract.Deck.DECK_ID)
-                val deckNameCol = decksCursor.getColumnIndex(FlashCardsContract.Deck.DECK_NAME)
-                val cardCountsCol = decksCursor.getColumnIndex(FlashCardsContract.Deck.DECK_COUNTS)
-
-                val deckId = decksCursor.getLong(deckIdCol)
-                val deckName = decksCursor.getString(deckNameCol)
-                val cardCounts = decksCursor.getString(cardCountsCol)
-                val counts = cardCounts.substring(1, cardCounts.length - 1).split(",")
-                    .map { it.toInt() }.toTypedArray()
-                val (learn, due, new) = counts
-
-                decks.add(DeckInfo(deckId, deckName, new, learn, due))
-
-            } while (decksCursor.moveToNext())
-
-            decksCursor.close()
-
-            return decks
         }
 
         fun reviewCard(card: CardInfo, ease: Int) {
-            val values = ContentValues()
-
-            values.put(FlashCardsContract.ReviewInfo.NOTE_ID, card.noteId)
-            values.put(FlashCardsContract.ReviewInfo.CARD_ORD, card.cardOrd)
-            values.put(FlashCardsContract.ReviewInfo.EASE, ease)
-
-            val timeTaken = System.currentTimeMillis() - card.startTime
-            values.put(FlashCardsContract.ReviewInfo.TIME_TAKEN, timeTaken)
-
-            PronKi.instance.applicationContext.contentResolver.update(
-                FlashCardsContract.ReviewInfo.CONTENT_URI, values, null, null
-            )
-        }
-
-        fun isPermissionGranted(): Boolean {
-            return ContextCompat.checkSelfPermission(
-                PronKi.instance.applicationContext, READ_WRITE_PERMISSION
-            ) == PackageManager.PERMISSION_GRANTED
+            val phrases = deckCards[currentDeck] ?: return
+            if (phrases.isNotEmpty())
+                phraseIndex = (phraseIndex + 1) % phrases.size
         }
     }
 }
